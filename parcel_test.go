@@ -1,10 +1,12 @@
 package main
 
 import (
+	"database/sql"
 	"math/rand"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,70 +23,90 @@ func getTestParcel() Parcel {
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 }
+
+func ConnectDb() (*sql.DB, error) {
+	db, err := sql.Open("sqlite", "tracker.db")
+	return db, err
+}
+
 func TestAddGetDelete(t *testing.T) {
-	db, err := tracker.db()
+	db, err := ConnectDb()
+	if err != nil {
+		require.NoError(t, err)
+	}
+	defer db.Close()
 	store := NewParcelStore(db)
 	parcel := getTestParcel()
 
-	id, err := store.AddParcel(parcel)
-	require.NoError(t, err)
-	require.NotEmpty(t, id)
+	parcel.Number, err = store.Add(parcel)
 
-	retrievedParcel, err := store.GetParcel(id)
 	require.NoError(t, err)
-	require.Equal(t, parcel.Client, retrievedParcel.Client)
-	require.Equal(t, parcel.Status, retrievedParcel.Status)
-	require.Equal(t, parcel.Address, retrievedParcel.Address)
-	require.WithinDuration(t, time.Now().UTC(), retrievedParcel.CreatedAt, time.Second)
+	require.NotEmpty(t, parcel.Number)
+	stored, err := store.Get(parcel.Number)
 
-	err = store.DeleteParcel(id)
+	require.NoError(t, err)
+	assert.Equal(t, parcel, stored)
+	err = store.Delete(parcel.Number)
 	require.NoError(t, err)
 
-	_, err = store.GetParcel(id)
-	require.Error(t, err)
+	_, err = store.Get(parcel.Number)
+	require.Equal(t, sql.ErrNoRows, err)
 }
 
 func TestSetAddress(t *testing.T) {
-	db, err := tracker.db()
-	require.NoError(t, err)
+	db, err := ConnectDb()
+	if err != nil {
+		require.NoError(t, err)
+	}
+	defer db.Close()
+
 	store := NewParcelStore(db)
 	parcel := getTestParcel()
 
-	id, err := store.AddParcel(parcel)
-	require.NoError(t, err)
-	require.NotEmpty(t, id)
+	parcel.Number, err = store.Add(parcel)
 
+	require.NoError(t, err)
+	require.NotEmpty(t, parcel.Number)
 	newAddress := "new test address"
-	err = store.SetAddress(id, newAddress)
+	err = store.SetAddress(parcel.Number, newAddress)
 	require.NoError(t, err)
 
-	retrievedParcel, err := store.GetParcel(id)
+	stored, err := store.Get(parcel.Number)
+
 	require.NoError(t, err)
-	require.Equal(t, newAddress, retrievedParcel.Address)
+	assert.Equal(t, newAddress, stored.Address)
 }
 
 func TestSetStatus(t *testing.T) {
-	db, err := tracker.db()
-	require.NoError(t, err)
+	db, err := ConnectDb()
+	if err != nil {
+		require.NoError(t, err)
+	}
+	defer db.Close()
+
 	store := NewParcelStore(db)
 	parcel := getTestParcel()
 
-	id, err := store.AddParcel(parcel)
-	require.NoError(t, err)
-	require.NotEmpty(t, id)
+	parcel.Number, err = store.Add(parcel)
 
-	newStatus := ParcelStatusDelivered
-	err = store.SetStatus(id, newStatus)
+	require.NoError(t, err)
+	require.NotEmpty(t, parcel.Number)
+	err = store.SetStatus(parcel.Number, ParcelStatusDelivered)
 	require.NoError(t, err)
 
-	retrievedParcel, err := store.GetParcel(id)
+	stored, err := store.Get(parcel.Number)
+
 	require.NoError(t, err)
-	require.Equal(t, newStatus, retrievedParcel.Status)
+	assert.Equal(t, ParcelStatusDelivered, stored.Status)
 }
 
 func TestGetByClient(t *testing.T) {
-	db, err := tracker.db()
-	require.NoError(t, err)
+	db, err := ConnectDb()
+	if err != nil {
+		require.NoError(t, err)
+	}
+	defer db.Close()
+
 	store := NewParcelStore(db)
 
 	parcels := []Parcel{
@@ -100,25 +122,20 @@ func TestGetByClient(t *testing.T) {
 	parcels[2].Client = client
 
 	for i := 0; i < len(parcels); i++ {
-		id, err := store.AddParcel(parcels[i])
+		id, err := store.Add(parcels[i])
+
 		require.NoError(t, err)
+		require.NotEmpty(t, id)
 
 		parcels[i].Number = id
-
 		parcelMap[id] = parcels[i]
 	}
 
-	storedParcels, err := store.GetParcelsByClient(client)
+	storedParcels, err := store.GetByClient(client)
 	require.NoError(t, err)
+	require.Equal(t, len(storedParcels), len(parcels))
 
-	require.Equal(t, len(parcels), len(storedParcels))
-
-	for _, storedParcel := range storedParcels {
-		originalParcel, ok := parcelMap[storedParcel.Number]
-		require.True(t, ok)
-
-		require.Equal(t, originalParcel.Client, storedParcel.Client)
-		require.Equal(t, originalParcel.Status, storedParcel.Status)
-		require.Equal(t, originalParcel.Address, storedParcel.Address)
+	for _, parcel := range storedParcels {
+		assert.Equal(t, parcel, parcelMap[parcel.Number])
 	}
 }
